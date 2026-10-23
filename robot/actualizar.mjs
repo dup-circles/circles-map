@@ -78,6 +78,28 @@ async function geocodificar(q, pais = "") {
   return res;
 }
 
+const cacheP = new Map();
+async function photon(q, pais = "") {
+  const clave = `${q}|${pais}`;
+  if (cacheP.has(clave)) return cacheP.get(clave);
+  let res = null;
+  try {
+    const r = await fetch(`https://photon.komoot.io/api/?limit=5&q=${encodeURIComponent(q)}`, { headers: { "User-Agent": UA } });
+    if (r.ok) {
+      const j = await r.json();
+      const ok = (j.features || []).find(ft => {
+        const p = ft.properties || {};
+        if (pais && (p.countrycode || "").toUpperCase() !== pais) return false;
+        return p.type === "house" || p.type === "street" || !["place", "boundary"].includes(p.osm_key);
+      });
+      if (ok) res = { lat: ok.geometry.coordinates[1], lng: ok.geometry.coordinates[0] };
+    }
+  } catch (e) { res = null; }
+  await sleep(1100);
+  cacheP.set(clave, res);
+  return res;
+}
+
 // Limpieza de datos cargados a mano
 const limpiarCiudad = c => {
   c = txt(c).replace(/\([^)]*\)/g, " ");
@@ -101,13 +123,9 @@ async function buscarExacta(f) {
   }
   if (calle && cp) variantes.push([calle, cp, pais]);
   if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, pais]);
-  const vistas = new Set();
-  for (const v of variantes) {
-    const q = v.filter(Boolean).join(", ");
-    if (vistas.has(q)) continue; vistas.add(q);
-    const p = await geocodificar(q, cod);
-    if (p) return p;
-  }
+  const consultas = [...new Set(variantes.map(v => v.filter(Boolean).join(", ")))];
+  for (const q of consultas) { const p = await geocodificar(q, cod); if (p) return p; }
+  for (const q of consultas) { const p = await photon(q, cod); if (p) return p; }   // segundo buscador
   return null;
 }
 async function buscarAproximada(f) {
@@ -126,7 +144,8 @@ console.log(`Círculos en Airtable: ${records.length}`);
 
 // --- Coordenadas ---------------------------------------------------------------
 const APROX_VIEJO = "Ubicación aproximada (centro de la ciudad): revisar dirección";
-const APROX = "Ubicación aproximada (centro de la ciudad). Si corregís la dirección, borrá Latitude y Longitude para que el robot vuelva a buscar";
+const APROX_ANTERIOR = "Ubicación aproximada (centro de la ciudad). Si corregís la dirección, borrá Latitude y Longitude para que el robot vuelva a buscar";
+const APROX = "Ubicación aproximada (centro de la ciudad): no se encontró la dirección exacta. Si la corregís, borrá Latitude y Longitude para que el robot vuelva a buscar";
 const NO_ENCONTRADA = "Dirección no encontrada: corregirla o cargar Latitude y Longitude a mano";
 const cambios = [];
 let ubicados = 0, mejorados = 0, aproximados = 0, sinUbicar = 0;
@@ -134,7 +153,7 @@ for (const rec of records) {
   const f = rec.fields;
   const tiene = num(f[F.lat]) !== null && num(f[F.lng]) !== null;
   const estado = txt(f[ESTADO_ID]);
-  if (tiene && estado !== APROX_VIEJO) continue;   // ya ubicado (o aproximado ya revisado)
+  if (tiene && estado !== APROX_VIEJO && estado !== APROX_ANTERIOR) continue;   // ya ubicado, o aproximado ya revisado
   const exacta = await buscarExacta(f);
   if (exacta) {
     tiene ? mejorados++ : ubicados++;
