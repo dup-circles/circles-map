@@ -113,6 +113,23 @@ const limpiarCalle = c => {
 };
 const limpiarPais = p => /^(other|otro|none|unknown)$/i.test(txt(p)) ? "" : txt(p);
 
+// Punto de referencia de la ciudad (con código postal si hay) para descartar resultados en otra ciudad
+const MAX_KM = 30;
+const distKm = (a, b) => {
+  const R = 6371, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+async function referencia(f) {
+  const ciudad = limpiarCiudad(f[F.ciudad]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
+  const cod = /^[A-Z]{2}$/.test(txt(f[F.paisCod])) ? txt(f[F.paisCod]) : "";
+  if (!ciudad) return null;
+  if (cp) { const p = await geocodificar([ciudad, cp, pais].filter(Boolean).join(", "), cod); if (p) return p; }
+  return geocodificar([ciudad, pais].filter(Boolean).join(", "), cod);
+}
+const cerca = (p, ref) => !ref || distKm(p, ref) <= MAX_KM;
+
 async function buscarExacta(f) {
   const calle = limpiarCalle(f[F.calle]), ciudad = limpiarCiudad(f[F.ciudad]), venue = txt(f[F.venue]).split(/\r?\n/)[0];
   const estado = txt(f[F.estado]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
@@ -124,8 +141,10 @@ async function buscarExacta(f) {
   if (calle && cp) variantes.push([calle, cp, pais]);
   if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, pais]);
   const consultas = [...new Set(variantes.map(v => v.filter(Boolean).join(", ")))];
-  for (const q of consultas) { const p = await geocodificar(q, cod); if (p) return p; }
-  for (const q of consultas) { const p = await photon(q, cod); if (p) return p; }   // segundo buscador
+  if (!consultas.length) return null;
+  const ref = await referencia(f);
+  for (const q of consultas) { const p = await geocodificar(q, cod); if (p && cerca(p, ref)) return p; }
+  for (const q of consultas) { const p = await photon(q, cod); if (p && cerca(p, ref)) return p; }   // segundo buscador
   return null;
 }
 async function buscarAproximada(f) {
@@ -172,6 +191,26 @@ for (const rec of records) {
     if (estado !== NO_ENCONTRADA) cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: NO_ENCONTRADA } });
   }
 }
+// --- Revisión opcional: pines a más de 30 km de su ciudad (se activa desde el botón Run workflow) ---
+let lejos = 0;
+if (process.env.REVISAR === "1") {
+  const tocados = new Set(cambios.map(c => c.id));
+  for (const rec of records) {
+    const f = rec.fields;
+    if (tocados.has(rec.id) || txt(f[ESTADO_ID])) continue;   // solo los que no tienen aviso
+    const lat = num(f[F.lat]), lng = num(f[F.lng]);
+    if (lat === null || lng === null) continue;
+    const ref = await referencia(f);
+    if (!ref) continue;
+    const d = distKm({ lat, lng }, ref);
+    if (d > MAX_KM) {
+      lejos++;
+      cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: `Revisar ubicación: el pin está a ${Math.round(d)} km de ${limpiarCiudad(f[F.ciudad])}` } });
+    }
+  }
+  console.log(`Revisión: ${lejos} pines lejos de su ciudad`);
+}
+
 for (let i = 0; i < cambios.length; i += 10) {
   await airtable("", { method: "PATCH", body: JSON.stringify({ records: cambios.slice(i, i + 10) }) });
 }
