@@ -20,7 +20,8 @@ const F = {
   tel: "fldjasftvLh7VbD8Y", email: "fldYpkAFaKUsuLolJ", frecuencia: "fldgg4vQNNs4oCFMQ",
   comentarios: "fldtMpMezNjpJXBD5", web: "fldunr9AuPPO9FVV6", webFixed: "fldm0DYk9RjAdV2QT",
   modificado: "fldhjjNPI1QdWoRza", foto: "fldFHNtdJyBcuGCno", lat: "fldmtlBCkoXSVTR3M",
-  lng: "fldw2oxwHsjLzuTkU", id: "fldBLjQIZ12zpUnH6", publicar: "fldnnKsIDR9RLnomK"
+  lng: "fldw2oxwHsjLzuTkU", id: "fldBLjQIZ12zpUnH6", publicar: "fldnnKsIDR9RLnomK",
+  paisCod: "fldofhJb4Cy1nyEyT"
 };
 const ESTADO_CAMPO = "Estado mapa";
 const ESTADO_ID = "flddkFIbasxUUPuE0";
@@ -61,46 +62,101 @@ async function leerTodo() {
   return out;
 }
 
-async function geocodificar(q) {
-  const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=en&q=${encodeURIComponent(q)}`;
-  const r = await fetch(u, { headers: { "User-Agent": UA } });
+const cache = new Map();
+async function geocodificar(q, pais = "") {
+  const clave = `${q}|${pais}`;
+  if (cache.has(clave)) return cache.get(clave);
+  let u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=en&q=${encodeURIComponent(q)}`;
+  if (pais) u += `&countrycodes=${pais.toLowerCase()}`;
+  let res = null;
+  try {
+    const r = await fetch(u, { headers: { "User-Agent": UA } });
+    if (r.ok) { const j = await r.json(); if (j[0]) res = { lat: +j[0].lat, lng: +j[0].lon }; }
+  } catch (e) { res = null; }
   await sleep(1100); // política de Nominatim: 1 pedido por segundo
-  if (!r.ok) return null;
-  const j = await r.json();
-  return j[0] ? { lat: +j[0].lat, lng: +j[0].lon } : null;
+  cache.set(clave, res);
+  return res;
+}
+
+// Limpieza de datos cargados a mano
+const limpiarCiudad = c => {
+  c = txt(c).replace(/\([^)]*\)/g, " ");
+  if (c.includes(" - ")) c = c.split(" - ").pop();
+  return c.replace(/\b(area|region|zone)\b/ig, " ").replace(/\s+/g, " ").trim();
+};
+const limpiarCalle = c => {
+  const lineas = txt(c).split(/\r?\n/).map(l => l.replace(/\([^)]*\)/g, " ").trim())
+    .filter(l => l && !/(to be determined|tbd|unknown|none|call for|varies|variable|various|rotating|online|zoom)/i.test(l));
+  return (lineas[0] || "").replace(/\s+/g, " ").trim();
+};
+const limpiarPais = p => /^(other|otro|none|unknown)$/i.test(txt(p)) ? "" : txt(p);
+
+async function buscarExacta(f) {
+  const calle = limpiarCalle(f[F.calle]), ciudad = limpiarCiudad(f[F.ciudad]), venue = txt(f[F.venue]).split(/\r?\n/)[0];
+  const estado = txt(f[F.estado]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
+  const cod = /^[A-Z]{2}$/.test(txt(f[F.paisCod])) ? txt(f[F.paisCod]) : "";
+  const variantes = [];
+  if (calle && ciudad) {
+    variantes.push([calle, ciudad, estado, cp, pais], [calle, ciudad, estado, pais], [calle, ciudad, pais]);
+  }
+  if (calle && cp) variantes.push([calle, cp, pais]);
+  if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, pais]);
+  const vistas = new Set();
+  for (const v of variantes) {
+    const q = v.filter(Boolean).join(", ");
+    if (vistas.has(q)) continue; vistas.add(q);
+    const p = await geocodificar(q, cod);
+    if (p) return p;
+  }
+  return null;
+}
+async function buscarAproximada(f) {
+  const ciudad = limpiarCiudad(f[F.ciudad]), estado = txt(f[F.estado]), pais = limpiarPais(f[F.pais]);
+  const cod = /^[A-Z]{2}$/.test(txt(f[F.paisCod])) ? txt(f[F.paisCod]) : "";
+  for (const v of [[ciudad, estado, pais], [ciudad, pais], [estado, pais]]) {
+    if (!v[0]) continue;
+    const p = await geocodificar(v.filter(Boolean).join(", "), cod);
+    if (p) return p;
+  }
+  return null;
 }
 
 const records = await leerTodo();
 console.log(`Círculos en Airtable: ${records.length}`);
 
-// --- Coordenadas faltantes ---------------------------------------------------
+// --- Coordenadas ---------------------------------------------------------------
+const APROX_VIEJO = "Ubicación aproximada (centro de la ciudad): revisar dirección";
+const APROX = "Ubicación aproximada (centro de la ciudad). Si corregís la dirección, borrá Latitude y Longitude para que el robot vuelva a buscar";
+const NO_ENCONTRADA = "Dirección no encontrada: corregirla o cargar Latitude y Longitude a mano";
 const cambios = [];
-let ubicados = 0, aproximados = 0, sinUbicar = 0;
+let ubicados = 0, mejorados = 0, aproximados = 0, sinUbicar = 0;
 for (const rec of records) {
   const f = rec.fields;
-  if (num(f[F.lat]) !== null && num(f[F.lng]) !== null) continue;
-  const calle = txt(f[F.calle]).replace(/\([^)]*\)/g, "").trim();
-  const ciudad = txt(f[F.ciudad]), estado = txt(f[F.estado]), pais = txt(f[F.pais]), cp = txt(f[F.cp]);
-  let punto = null, nota = "";
-  if (calle && ciudad) punto = await geocodificar([calle, ciudad, estado, cp, pais].filter(Boolean).join(", "));
-  if (!punto && ciudad) {
-    punto = await geocodificar([ciudad, estado, pais].filter(Boolean).join(", "));
-    if (punto) nota = "Ubicación aproximada (centro de la ciudad): revisar dirección";
+  const tiene = num(f[F.lat]) !== null && num(f[F.lng]) !== null;
+  const estado = txt(f[ESTADO_ID]);
+  if (tiene && estado !== APROX_VIEJO) continue;   // ya ubicado (o aproximado ya revisado)
+  const exacta = await buscarExacta(f);
+  if (exacta) {
+    tiene ? mejorados++ : ubicados++;
+    cambios.push({ id: rec.id, fields: { [F.lat]: exacta.lat.toFixed(6), [F.lng]: exacta.lng.toFixed(6), [ESTADO_CAMPO]: "" } });
+    f[F.lat] = exacta.lat.toFixed(6); f[F.lng] = exacta.lng.toFixed(6);
+    continue;
   }
-  if (punto) {
-    if (nota) aproximados++; else ubicados++;
-    cambios.push({ id: rec.id, fields: { [F.lat]: punto.lat.toFixed(6), [F.lng]: punto.lng.toFixed(6), [ESTADO_CAMPO]: nota } });
-    f[F.lat] = punto.lat.toFixed(6); f[F.lng] = punto.lng.toFixed(6);
+  if (tiene) { cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: APROX } }); aproximados++; continue; }
+  const aprox = await buscarAproximada(f);
+  if (aprox) {
+    aproximados++;
+    cambios.push({ id: rec.id, fields: { [F.lat]: aprox.lat.toFixed(6), [F.lng]: aprox.lng.toFixed(6), [ESTADO_CAMPO]: APROX } });
+    f[F.lat] = aprox.lat.toFixed(6); f[F.lng] = aprox.lng.toFixed(6);
   } else {
     sinUbicar++;
-    const aviso = "Dirección no encontrada: corregirla o cargar Latitude y Longitude a mano";
-    if (txt(f[ESTADO_ID]) !== aviso) cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: aviso } });
+    if (estado !== NO_ENCONTRADA) cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: NO_ENCONTRADA } });
   }
 }
 for (let i = 0; i < cambios.length; i += 10) {
   await airtable("", { method: "PATCH", body: JSON.stringify({ records: cambios.slice(i, i + 10) }) });
 }
-console.log(`Coordenadas nuevas: ${ubicados} exactas, ${aproximados} aproximadas, ${sinUbicar} sin ubicar`);
+console.log(`Coordenadas: ${ubicados} nuevas exactas, ${mejorados} aproximadas mejoradas a exactas, ${aproximados} aproximadas, ${sinUbicar} sin ubicar`);
 
 // --- Datos y fotos de los círculos publicados -------------------------------------
 await mkdir(`${OUT}/data`, { recursive: true });
