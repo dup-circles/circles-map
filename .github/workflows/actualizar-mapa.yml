@@ -48,7 +48,10 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: sitio
+          name: github-pages-${{ github.run_attempt }}
 
       - name: Publicar el mapa
         id: publicar
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
