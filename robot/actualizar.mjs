@@ -25,7 +25,7 @@ const F = {
 };
 const ESTADO_CAMPO = "Estado mapa";
 const ESTADO_ID = "flddkFIbasxUUPuE0";
-const UA = "DUP-mapa-circulos/1.0 (https://github.com/matias-dup/mapa-circulos)";
+const UA = "DUP-mapa-circulos/1.0 (https://github.com/dup-circles/mapa-circulos)";
 const OUT = "sitio";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
