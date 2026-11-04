@@ -25,7 +25,7 @@ const F = {
 };
 const ESTADO_CAMPO = "Estado mapa";
 const ESTADO_ID = "flddkFIbasxUUPuE0";
-const UA = "DUP-mapa-circulos/1.0 (https://github.com/dup-circles/mapa-circulos)";
+const UA = "DUP-mapa-circulos/1.0 (https://github.com/dup-circles/circles-map)";
 const OUT = "sitio";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -249,7 +249,8 @@ for (const rec of records) {
     direccion, contacto, telefono: txt(f[F.tel]), email: txt(f[F.email]),
     frecuencia: txt(f[F.frecuencia]), comentarios: txt(f[F.comentarios]),
     web: urlDe(f[F.webFixed]) || urlDe(f[F.web]),
-    actualizado: txt(f[F.modificado]).slice(0, 10), foto, lat, lng
+    actualizado: txt(f[F.modificado]).slice(0, 10), foto, lat, lng,
+    aprox: /aproximad|centro de/i.test(txt(f[ESTADO_ID]))   // ubicación aproximada: el mapa la muestra distinta
   });
 }
 await writeFile(`${OUT}/data/circulos.json`, JSON.stringify(publicados));
