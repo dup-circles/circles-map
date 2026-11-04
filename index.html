@@ -715,6 +715,11 @@ li button:focus-visible{outline:2px solid var(--teal)}
 .leaflet-container{background:var(--sea);font-family:var(--body)}
 .marker{width:26px;height:26px;border-radius:50%;border:6px solid var(--sun);background:#fff;box-shadow:0 0 0 2px #fff}
 .marker.active{border-color:var(--teal)}
+.marker.aprox{border-style:dashed;border-width:4px;width:24px;height:24px;background:color-mix(in srgb,var(--sun) 18%,#fff)}
+.marker.aprox.active{border-color:var(--teal)}
+.pop .aprox-note{display:inline-block;margin:4px 0 6px;font-size:12.5px;font-weight:600;color:var(--sun-deep);background:color-mix(in srgb,var(--sun) 16%,transparent);padding:2px 9px;border-radius:999px}
+.legend-aprox{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin-top:8px}
+.legend-aprox i{flex:none;width:14px;height:14px;border-radius:50%;border:3px dashed var(--sun);background:color-mix(in srgb,var(--sun) 18%,#fff)}
 .cluster{width:40px;height:40px;border-radius:50%;background:var(--sun);border:3px solid #fff;color:var(--ink);font-family:var(--head);font-weight:600;font-size:14px;display:grid;place-items:center;box-shadow:0 1px 4px rgba(0,0,0,.2)}
 .country-tip{background:#1D2B2A;color:#fff;border:0;font-size:12px;padding:3px 8px}
 .country-tip::before{display:none}
@@ -772,6 +777,7 @@ html{scroll-padding-top:env(safe-area-inset-top,0px)}
       <p class="sub">Find a circle near you and get in touch.</p>
       <input class="search" id="q" type="search" placeholder="Search by name, city or country" aria-label="Search circles">
       <div class="count" id="count"></div>
+      <div class="legend-aprox"><i aria-hidden="true"></i>Dashed pin: approximate location</div>
     </div>
     <ul id="list"></ul>
   </aside>
@@ -795,7 +801,7 @@ const DATA = RAW.map(c => ({
   Country: c.pais || "No country", City: c.ciudad,
   venue: c.venue, contacto: c.contacto, tel: c.telefono, email: c.email,
   frecuencia: c.frecuencia, comentarios: c.comentarios, actualizado: c.actualizado,
-  "Button Link": c.web, "Facebook link": "", foto: c.foto, hue: null
+  "Button Link": c.web, "Facebook link": "", foto: c.foto, hue: null, aprox: !!c.aprox
 }));
 
 function placeholder(hue){
@@ -819,6 +825,7 @@ function popupHTML(c){
     ${c.foto ? `<img src="fotos/${encodeURIComponent(c.foto)}" loading="lazy" alt="Photo of ${esc(c.Name)}">` : ""}
     <div class="body">
       <h2>${esc(c.Name)}</h2>
+      ${c.aprox ? `<span class="aprox-note">Approximate location — see address</span>` : ""}
       ${c.venue ? `<p>${esc(c.venue)}</p>` : ""}
       ${c.Address ? `<p>${esc(c.Address)}</p>` : ""}
       ${c.contacto ? `<p>Contact: ${esc(c.contacto)}</p>` : ""}
@@ -862,13 +869,13 @@ function toggleStreets(){
 }
 map.on("zoomend", toggleStreets);
 
-const icon = active => L.divIcon({className:"", html:`<div class="marker${active?" active":""}"></div>`, iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-14]});
+const icon = (active, aprox) => L.divIcon({className:"", html:`<div class="marker${active?" active":""}${aprox?" aprox":""}"></div>`, iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-14]});
 const cluster = L.markerClusterGroup({showCoverageOnHover:false, zoomToBoundsOnClick:false, maxClusterRadius:45, spiderfyDistanceMultiplier:1.6, spiderLegPolylineOptions:{weight:1.5, color:"#9A6B05", opacity:0.6},
   iconCreateFunction: cl => L.divIcon({className:"", html:`<div class="cluster">${cl.getChildCount()}</div>`, iconSize:[40,40]})});
 const markers = DATA.map(c => {
-  const m = L.marker([c.Latitude,c.Longitude],{icon:icon(false), title:c.Name}).bindPopup(popupHTML(c),{maxWidth:290});
-  m.on("popupopen",()=>m.setIcon(icon(true)));
-  m.on("popupclose",()=>m.setIcon(icon(false)));
+  const m = L.marker([c.Latitude,c.Longitude],{icon:icon(false, c.aprox), title:c.Name}).bindPopup(popupHTML(c),{maxWidth:290});
+  m.on("popupopen",()=>m.setIcon(icon(true, c.aprox)));
+  m.on("popupclose",()=>m.setIcon(icon(false, c.aprox)));
   return m;
 });
 cluster.addLayers(markers); map.addLayer(cluster);
@@ -939,7 +946,7 @@ map.on("popupopen", e => {
     const [u,d] = el.dataset.mail.split("|"), addr = u + "@" + d;
     el.textContent = addr;                       // muestra la dirección
     copiar(addr).then(ok => aviso(ok ? "Email copied: " + addr : addr));
-    setTimeout(() => { location.href = "mailto:" + addr; }, 150);   // intenta abrir el correo
+    setTimeout(() => { location.href = "mailto:" + addr; }, 150);   // abre el programa de correo
   }));
 });
 async function copiar(t){
