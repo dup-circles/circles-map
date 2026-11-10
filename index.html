@@ -768,11 +768,18 @@ html{scroll-padding-top:env(safe-area-inset-top,0px)}
 #aviso.on{opacity:1;transform:translate(-50%,0)}
 @media (prefers-reduced-motion:reduce){#aviso{transition:none}}
 .pop img.pop-foto{cursor:zoom-in}
-#lightbox{position:fixed;inset:0;z-index:3000;background:rgba(10,16,15,.82);display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out}
+#lightbox{position:fixed;inset:0;z-index:3000;background:rgba(10,16,15,.86);display:none;align-items:center;justify-content:center;padding:24px;overflow:hidden}
 #lightbox.on{display:flex}
-#lightbox img{max-width:min(92vw,900px);max-height:84vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);background:#fff;cursor:default}
-#lightbox button{position:absolute;top:12px;right:12px;width:44px;height:44px;border:0;border-radius:50%;background:rgba(255,255,255,.92);color:#1d2b2a;font-size:26px;line-height:1;cursor:pointer}
-#lightbox button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+#lightbox img{max-width:min(92vw,900px);max-height:80vh;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);background:#fff;transform-origin:0 0;touch-action:none;user-select:none;-webkit-user-drag:none;cursor:zoom-in}
+#lightbox.zoomed img{cursor:grab;border-radius:0}
+#lightbox.dragging img{cursor:grabbing}
+#lightbox .lb-close{position:absolute;top:12px;right:12px;width:44px;height:44px;border:0;border-radius:50%;background:rgba(255,255,255,.92);color:#1d2b2a;font-size:26px;line-height:1;cursor:pointer;z-index:2}
+#lightbox .lb-tools{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:6px;background:rgba(255,255,255,.92);border-radius:999px;padding:5px;z-index:2;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+#lightbox .lb-tools button{min-width:40px;height:40px;border:0;border-radius:999px;background:transparent;color:#1d2b2a;font:600 20px/1 "Nunito Sans",system-ui,sans-serif;cursor:pointer;padding:0 12px}
+#lightbox .lb-tools button.lb-fit{font-size:14px}
+#lightbox .lb-tools button:hover{background:rgba(29,43,42,.1)}
+#lightbox .lb-tools button:disabled{opacity:.35;cursor:default;background:transparent}
+#lightbox button:focus-visible{outline:3px solid #2f7d6d;outline-offset:2px}
 </style>
 </head>
 <body>
@@ -826,7 +833,13 @@ function popupHTML(c){
   if (c.email && c.email.includes("@")){ const [u,dm]=c.email.split("@"); a.push(`<a href="#" data-mail="${esc(u)}|${esc(dm)}">Email</a>`); }
   if (c["Facebook link"]) a.push(`<a href="${esc(c["Facebook link"])}" target="_blank" rel="noopener">Facebook</a>`);
   if (c["Button Link"]) a.push(`<a href="${esc(c["Button Link"])}" target="_blank" rel="noopener">Website</a>`);
-  if (c.Address && !(c.aprox && c.sinDir)) a.push(`<a class="go" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(c.Address)}" target="_blank" rel="noopener">Directions</a>`);
+  if (!(c.aprox && c.sinDir)) {
+    // exact pin: open those coordinates; approximate pin: search the written address instead
+    const q = c.aprox
+      ? [c.Address, c.City, c.Country].filter(Boolean).join(", ")
+      : `${c.Latitude},${c.Longitude}`;
+    a.push(`<a class="go" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}" target="_blank" rel="noopener">Google Maps</a>`);
+  }
   return `<div class="pop">
     ${c.foto ? `<img class="pop-foto" src="fotos/${encodeURIComponent(c.foto)}" loading="lazy" alt="Photo of ${esc(c.Name)}" title="Click to enlarge">` : ""}
     <div class="body">
@@ -1004,31 +1017,122 @@ function render(q){
   count.textContent = (shown === 1 ? "1 circle" : `${shown} circles`) + (nc ? ` in ${nc} ${nc === 1 ? "country" : "countries"}` : "");
   if (!shown) list.innerHTML = `<li class="empty">No circles match that name or place. Try searching by country.</li>`;
 }
-// Lightbox: enlarge popup photo
+// Lightbox: enlarge popup photo, with zoom (buttons, wheel, double-click, pinch) and drag
 const lb = document.createElement("div");
 lb.id = "lightbox";
 lb.setAttribute("role", "dialog");
 lb.setAttribute("aria-modal", "true");
 lb.setAttribute("aria-label", "Photo");
-lb.innerHTML = '<button type="button" aria-label="Close">\u00d7</button><img alt="">';
+lb.innerHTML = '<button type="button" class="lb-close" aria-label="Close">×</button>'
+  + '<img alt="" draggable="false">'
+  + '<div class="lb-tools"><button type="button" class="lb-out" aria-label="Zoom out">−</button>'
+  + '<button type="button" class="lb-fit" aria-label="Fit to screen">Fit</button>'
+  + '<button type="button" class="lb-in" aria-label="Zoom in">+</button></div>';
 document.body.appendChild(lb);
-const lbImg = lb.querySelector("img"), lbBtn = lb.querySelector("button");
-let lbPrev = null;
+const lbImg = lb.querySelector("img"), lbClose = lb.querySelector(".lb-close");
+const lbIn = lb.querySelector(".lb-in"), lbOut = lb.querySelector(".lb-out"), lbFit = lb.querySelector(".lb-fit");
+const Z_MAX = 5;
+let lbPrev = null, zs = 1, tx = 0, ty = 0;
+function zApply() {
+  const w = lbImg.offsetWidth, h = lbImg.offsetHeight;
+  if (zs <= 1) { zs = 1; tx = 0; ty = 0; }
+  else { tx = Math.min(0, Math.max(w - w * zs, tx)); ty = Math.min(0, Math.max(h - h * zs, ty)); }
+  lbImg.style.transform = `translate(${tx}px,${ty}px) scale(${zs})`;
+  lb.classList.toggle("zoomed", zs > 1);
+  lbOut.disabled = lbFit.disabled = zs <= 1; lbIn.disabled = zs >= Z_MAX;
+}
+// zoom so that screen point (px,py) stays under the cursor/fingers
+function zoomAt(ns, px, py) {
+  ns = Math.min(Z_MAX, Math.max(1, ns));
+  const r = lbImg.getBoundingClientRect();
+  const ox = r.left - tx, oy = r.top - ty;            // untransformed top-left
+  const ux = (px - ox - tx) / zs, uy = (py - oy - ty) / zs;
+  tx = px - ox - ux * ns; ty = py - oy - uy * ns; zs = ns; zApply();
+}
+function zoomCenter(f) { const r = lbImg.getBoundingClientRect(); zoomAt(zs * f, r.left + r.width / 2, r.top + r.height / 2); }
+function openLb(src, alt) {
+  lbPrev = document.activeElement;
+  zs = 1; tx = 0; ty = 0; lbImg.style.transform = "";
+  lbImg.src = src; lbImg.alt = alt;
+  lb.classList.add("on"); zApply(); lbClose.focus();
+}
 function closeLb() {
   if (!lb.classList.contains("on")) return;
-  lb.classList.remove("on"); lbImg.removeAttribute("src");
+  lb.classList.remove("on", "zoomed", "dragging"); lbImg.removeAttribute("src");
   if (lbPrev && lbPrev.focus) lbPrev.focus();
 }
 document.addEventListener("click", e => {
   const img = e.target.closest && e.target.closest(".pop img.pop-foto");
   if (!img) return;
   e.preventDefault(); e.stopPropagation();
-  lbPrev = document.activeElement;
-  lbImg.src = img.currentSrc || img.src; lbImg.alt = img.alt;
-  lb.classList.add("on"); lbBtn.focus();
+  openLb(img.currentSrc || img.src, img.alt);
 });
-lb.addEventListener("click", e => { if (e.target !== lbImg) closeLb(); });
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeLb(); });
+lbClose.addEventListener("click", closeLb);
+lbIn.addEventListener("click", () => zoomCenter(1.6));
+lbOut.addEventListener("click", () => zoomCenter(1 / 1.6));
+lbFit.addEventListener("click", () => { zs = 1; zApply(); });
+lbImg.addEventListener("dblclick", e => { e.preventDefault(); if (lastPtr !== "mouse") return; zs > 1 ? (zs = 1, zApply()) : zoomAt(2.5, e.clientX, e.clientY); });
+lb.addEventListener("wheel", e => {
+  if (!lb.classList.contains("on")) return;
+  e.preventDefault();
+  zoomAt(zs * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+}, { passive: false });
+// drag to pan, pinch to zoom, double-tap on touch
+const ptrs = new Map();
+let drag = null, pinch = null, moved = false, lastTap = 0, lastPtr = "mouse";
+lbImg.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  lastPtr = e.pointerType;
+  lbImg.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  moved = false;
+  if (ptrs.size === 2) {
+    const [p1, p2] = [...ptrs.values()];
+    pinch = { d: Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1, s: zs }; drag = null;
+  } else if (ptrs.size === 1) {
+    drag = { x: e.clientX, y: e.clientY, tx, ty };
+  }
+});
+lbImg.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && ptrs.size >= 2) {
+    const [p1, p2] = [...ptrs.values()];
+    const d = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    zoomAt(pinch.s * d / pinch.d, (p1.x + p2.x) / 2, (p1.y + p2.y) / 2); moved = true;
+  } else if (drag && zs > 1) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+    tx = drag.tx + dx; ty = drag.ty + dy; lb.classList.add("dragging"); zApply();
+  }
+});
+function ptrEnd(e) {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.delete(e.pointerId);
+  lb.classList.remove("dragging");
+  if (ptrs.size < 2) pinch = null;
+  if (ptrs.size === 1) { const [p] = [...ptrs.values()]; drag = { x: p.x, y: p.y, tx, ty }; }
+  else if (ptrs.size === 0) {
+    drag = null;
+    if (e.pointerType !== "mouse" && !moved && e.type === "pointerup") {
+      const now = Date.now();
+      if (now - lastTap < 300) { zs > 1 ? (zs = 1, zApply()) : zoomAt(2.5, e.clientX, e.clientY); lastTap = 0; }
+      else lastTap = now;
+    }
+  }
+}
+lbImg.addEventListener("pointerup", ptrEnd);
+lbImg.addEventListener("pointercancel", ptrEnd);
+// click on the dark background closes (not on the photo or the toolbar)
+lb.addEventListener("click", e => { if (e.target === lb) closeLb(); });
+document.addEventListener("keydown", e => {
+  if (!lb.classList.contains("on")) return;
+  if (e.key === "Escape") closeLb();
+  else if (e.key === "+" || e.key === "=") zoomCenter(1.6);
+  else if (e.key === "-") zoomCenter(1 / 1.6);
+  else if (e.key === "0") { zs = 1; zApply(); }
+});
+window.addEventListener("resize", () => { if (lb.classList.contains("on")) zApply(); });
 
 document.getElementById("q").addEventListener("input", e => render(e.target.value));
 render("");
