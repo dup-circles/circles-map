@@ -250,7 +250,8 @@ for (const rec of records) {
     frecuencia: txt(f[F.frecuencia]), comentarios: txt(f[F.comentarios]),
     web: urlDe(f[F.webFixed]) || urlDe(f[F.web]),
     actualizado: txt(f[F.modificado]).slice(0, 10), foto, lat, lng,
-    aprox: /aproximad|centro de/i.test(txt(f[ESTADO_ID]))   // ubicación aproximada: el mapa la muestra distinta
+    aprox: /aproximad|centro de/i.test(txt(f[ESTADO_ID])),   // ubicación aproximada: el mapa la muestra distinta
+    sinDireccion: !limpiarCalle(f[F.calle])                  // no hay dirección real (Unknown, "contact for details", etc.)
   });
 }
 await writeFile(`${OUT}/data/circulos.json`, JSON.stringify(publicados));
