@@ -14,14 +14,13 @@ if (!TOKEN) { console.error("Falta el secreto AIRTABLE_TOKEN"); process.exit(1);
 const BASE = "appSias45AaIRiFWA";
 const TABLE = "tblXjtZI857HIqarB";
 const F = {
-  nombre: "fld7jaJ1WUIMxBJsn", pais: "fldhHXURpXbNZ6c29", estado: "fld5qBILDvP6XzfZT",
+  nombre: "fld7jaJ1WUIMxBJsn", pais: "fldhHXURpXbNZ6c29",
   ciudad: "fldUykq6i4GoXeFao", venue: "fldev2BGQTJGrSnHP", calle: "fldt4ijqNaIdDhnBa",
   cp: "fldr1blVgWKDirB1u", nombrePila: "fldhYkfdsW7Rjk1yk", apellido: "fldefHPlN5ADQwdrI",
   tel: "fldjasftvLh7VbD8Y", email: "fldYpkAFaKUsuLolJ", frecuencia: "fldgg4vQNNs4oCFMQ",
-  comentarios: "fldtMpMezNjpJXBD5", web: "fldunr9AuPPO9FVV6", webFixed: "fldm0DYk9RjAdV2QT",
+  comentarios: "fldtMpMezNjpJXBD5", web: "fldunr9AuPPO9FVV6",
   modificado: "fldhjjNPI1QdWoRza", foto: "fldFHNtdJyBcuGCno", lat: "fldmtlBCkoXSVTR3M",
-  lng: "fldw2oxwHsjLzuTkU", id: "fldBLjQIZ12zpUnH6", publicar: "fldnnKsIDR9RLnomK",
-  paisCod: "fldofhJb4Cy1nyEyT"
+  lng: "fldw2oxwHsjLzuTkU", id: "fldBLjQIZ12zpUnH6", publicar: "fldnnKsIDR9RLnomK"
 };
 const ESTADO_CAMPO = "Estado mapa";
 const ESTADO_ID = "flddkFIbasxUUPuE0";
@@ -37,7 +36,45 @@ const txt = v => {
   return /^(none|unknown|n\/a|-)$/i.test(v) ? "" : v;
 };
 const num = v => { const n = parseFloat(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : null; };
-const urlDe = v => { const m = txt(v).match(/https?:\/\/[^\s<>"]+/); return m ? m[0] : ""; };
+// Link de la web: acepta "https://…", "www.…" o "dominio.org/…" (sin el campo de IA "website fixed").
+// Los dominios sin "https://" solo valen con terminaciones conocidas, para no convertir "St.Louis" o "Ithaca.NY" en links.
+const TLD = new Set("com org net edu gov info io co me app art life community center church online site world earth love dance de uk fr es it nl be ch at au nz ca us ar mx br cl uy pe co ie se dk no fi pl cz pt gr hu ro ru jp in za il tr eu".split(" "));
+const urlDe = v => {
+  const t = txt(v);
+  const m = t.match(/https?:\/\/[^\s<>"\]]+/);
+  if (m) return m[0].replace(/[.,;)]+$/, "");   // saca el ")" final de links con formato [texto](link)
+  const sinMails = t.replace(/\S+@\S+/g, " ");
+  for (const d of sinMails.matchAll(/\b(?:www\.)?[a-z0-9-]{2,}(?:\.[a-z0-9-]+)*\.([a-z]{2,})(?:\/[^\s<>"]*)?/g))
+    if (TLD.has(d[1]) || d[0].startsWith("www.")) return "https://" + d[0].replace(/[.,;)]+$/, "");
+  return "";
+};
+
+// Código de país (ISO de 2 letras) a partir del nombre escrito, sin el campo de IA "country ab".
+// Usa los nombres de países que trae Node en varios idiomas, más algunos alias comunes.
+const sinTildes = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z ]/g, " ").replace(/\b(and|the)\b/g, " ").replace(/\s+/g, " ").trim();
+const CODIGOS = new Map();
+{
+  const letras = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const NO_ISO = new Set("AC AN BU CP CQ CS DD DG DY EA EU EZ FX HV IC NH NT QO RH SU TA TP UK UN VD XA XB YD YU ZR ZZ".split(" "));
+  const idiomas = ["en", "es", "fr", "de", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "cs", "hu", "tr", "ro"].map(l => new Intl.DisplayNames([l], { type: "region" }));
+  for (const a of letras) for (const b of letras) {
+    const c = a + b;
+    if (NO_ISO.has(c)) continue;   // códigos reservados o viejos (UK, FX, EU…): Nominatim no los usa
+    for (const dn of idiomas) {
+      let n; try { n = dn.of(c); } catch { continue; }
+      if (n && n !== c) CODIGOS.set(sinTildes(n), c);
+    }
+  }
+  const alias = { "usa": "US", "us": "US", "u s a": "US", "united states of america": "US", "america": "US",
+    "uk": "GB", "u k": "GB", "england": "GB", "scotland": "GB", "wales": "GB", "northern ireland": "GB", "great britain": "GB",
+    "holland": "NL", "deutschland": "DE", "turkey": "TR", "czech republic": "CZ", "russia": "RU", "south korea": "KR", "korea": "KR",
+    "russian federation": "RU", "hong kong": "HK", "macau": "MO", "macao": "MO", "macedonia": "MK", "ivory coast": "CI", "palestine": "PS",
+    "aotearoa": "NZ", "burma": "MM", "swaziland": "SZ", "cape verde": "CV", "east timor": "TL", "vatican": "VA",
+    "congo democratic republic of": "CD", "democratic republic of congo": "CD" };
+  for (const [k, v] of Object.entries(alias)) CODIGOS.set(k, v);
+}
+// Acepta también la forma "Korea, Republic of" / "Iran, Islamic Republic of" (usa lo que va antes de la coma)
+const codigoPais = p => { const t = txt(p); return CODIGOS.get(sinTildes(t)) || CODIGOS.get(sinTildes(t.split(",")[0])) || ""; };
 
 async function airtable(path, opts = {}) {
   for (let intento = 0; intento < 5; intento++) {
@@ -123,7 +160,7 @@ const distKm = (a, b) => {
 };
 async function referencia(f) {
   const ciudad = limpiarCiudad(f[F.ciudad]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
-  const cod = /^[A-Z]{2}$/.test(txt(f[F.paisCod])) ? txt(f[F.paisCod]) : "";
+  const cod = codigoPais(f[F.pais]);
   if (!ciudad) return null;
   if (cp) { const p = await geocodificar([ciudad, cp, pais].filter(Boolean).join(", "), cod); if (p) return p; }
   return geocodificar([ciudad, pais].filter(Boolean).join(", "), cod);
@@ -132,11 +169,11 @@ const cerca = (p, ref) => !ref || distKm(p, ref) <= MAX_KM;
 
 async function buscarExacta(f) {
   const calle = limpiarCalle(f[F.calle]), ciudad = limpiarCiudad(f[F.ciudad]), venue = txt(f[F.venue]).split(/\r?\n/)[0];
-  const estado = txt(f[F.estado]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
-  const cod = /^[A-Z]{2}$/.test(txt(f[F.paisCod])) ? txt(f[F.paisCod]) : "";
+  const pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
+  const cod = codigoPais(f[F.pais]);
   const variantes = [];
   if (calle && ciudad) {
-    variantes.push([calle, ciudad, estado, cp, pais], [calle, ciudad, estado, pais], [calle, ciudad, pais]);
+    variantes.push([calle, ciudad, cp, pais], [calle, ciudad, pais]);
   }
   if (calle && cp) variantes.push([calle, cp, pais]);
   if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, pais]);
@@ -148,9 +185,9 @@ async function buscarExacta(f) {
   return null;
 }
 async function buscarAproximada(f) {
-  const ciudad = limpiarCiudad(f[F.ciudad]), estado = txt(f[F.estado]), pais = limpiarPais(f[F.pais]);
-  const cod = /^[A-Z]{2}$/.test(txt(f[F.paisCod])) ? txt(f[F.paisCod]) : "";
-  for (const v of [[ciudad, estado, pais], [ciudad, pais], [estado, pais]]) {
+  const ciudad = limpiarCiudad(f[F.ciudad]), cp = txt(f[F.cp]), pais = limpiarPais(f[F.pais]);
+  const cod = codigoPais(f[F.pais]);
+  for (const v of [[ciudad, cp, pais], [ciudad, pais]]) {
     if (!v[0]) continue;
     const p = await geocodificar(v.filter(Boolean).join(", "), cod);
     if (p) return p;
@@ -243,12 +280,12 @@ for (const rec of records) {
     } catch (e) { foto = ""; fotosError++; }
   }
   const contacto = [txt(f[F.nombrePila]), txt(f[F.apellido])].filter(Boolean).join(" ");
-  const direccion = [txt(f[F.calle]), txt(f[F.ciudad]), txt(f[F.estado]), txt(f[F.pais])].filter(Boolean).join(", ");
+  const direccion = [txt(f[F.calle]), txt(f[F.ciudad]), txt(f[F.cp]), txt(f[F.pais])].filter(Boolean).join(", ");
   publicados.push({
     id, nombre: txt(f[F.nombre]), pais: txt(f[F.pais]), ciudad: txt(f[F.ciudad]), venue: txt(f[F.venue]),
     direccion, contacto, telefono: txt(f[F.tel]), email: txt(f[F.email]),
     frecuencia: txt(f[F.frecuencia]), comentarios: txt(f[F.comentarios]),
-    web: urlDe(f[F.webFixed]) || urlDe(f[F.web]),
+    web: urlDe(f[F.web]),
     actualizado: txt(f[F.modificado]).slice(0, 10), foto, lat, lng,
     aprox: /aproximad|centro de/i.test(txt(f[ESTADO_ID])),   // ubicación aproximada: el mapa la muestra distinta
     sinDireccion: !limpiarCalle(f[F.calle])                  // no hay dirección real (Unknown, "contact for details", etc.)
