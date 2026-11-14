@@ -834,10 +834,8 @@ function popupHTML(c){
   if (c["Facebook link"]) a.push(`<a href="${esc(c["Facebook link"])}" target="_blank" rel="noopener">Facebook</a>`);
   if (c["Button Link"]) a.push(`<a href="${esc(c["Button Link"])}" target="_blank" rel="noopener">Website</a>`);
   if (!(c.aprox && c.sinDir)) {
-    // exact pin: open those coordinates; approximate pin: search the written address instead
-    const q = c.aprox
-      ? [c.Address, c.City, c.Country].filter(Boolean).join(", ")
-      : `${c.Latitude},${c.Longitude}`;
+    // street address listed: search it; no street: open the pin coordinates
+    const q = !c.sinDir && c.Address ? c.Address : `${c.Latitude},${c.Longitude}`;
     a.push(`<a class="go" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}" target="_blank" rel="noopener">Google Maps</a>`);
   }
   return `<div class="pop">
