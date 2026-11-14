@@ -20,7 +20,8 @@ const F = {
   tel: "fldjasftvLh7VbD8Y", email: "fldYpkAFaKUsuLolJ", frecuencia: "fldgg4vQNNs4oCFMQ",
   comentarios: "fldtMpMezNjpJXBD5", web: "fldunr9AuPPO9FVV6",
   modificado: "fldhjjNPI1QdWoRza", foto: "fldFHNtdJyBcuGCno", lat: "fldmtlBCkoXSVTR3M",
-  lng: "fldw2oxwHsjLzuTkU", id: "fldBLjQIZ12zpUnH6", publicar: "fldnnKsIDR9RLnomK"
+  lng: "fldw2oxwHsjLzuTkU", id: "fldBLjQIZ12zpUnH6", publicar: "fldnnKsIDR9RLnomK",
+  estado: "flddtHpMGKsW91l48"   // "State/Province" (campo normal, no el de IA)
 };
 const ESTADO_CAMPO = "Estado mapa";
 const ESTADO_ID = "flddkFIbasxUUPuE0";
@@ -115,6 +116,23 @@ async function geocodificar(q, pais = "") {
   return res;
 }
 
+// Ubicación de un código postal (búsqueda estructurada: el código manda, no se mezcla con nombres)
+const cacheCP = new Map();
+async function geocodificarCP(cp, pais = "") {
+  if (!cp || !pais) return null;
+  if (pais === "US") { const m = cp.match(/\b\d{5}\b/); if (!m) return null; cp = m[0]; }   // "97403-1536" → "97403"
+  const clave = `${cp}|${pais}`;
+  if (cacheCP.has(clave)) return cacheCP.get(clave);
+  let res = null;
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&postalcode=${encodeURIComponent(cp)}&countrycodes=${pais.toLowerCase()}`, { headers: { "User-Agent": UA } });
+    if (r.ok) { const j = await r.json(); if (j[0]) res = { lat: +j[0].lat, lng: +j[0].lon }; }
+  } catch (e) { res = null; }
+  await sleep(1100);
+  cacheCP.set(clave, res);
+  return res;
+}
+
 const cacheP = new Map();
 async function photon(q, pais = "") {
   const clave = `${q}|${pais}`;
@@ -158,10 +176,12 @@ const distKm = (a, b) => {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
 };
+// Con estado/provincia se busca "ciudad, estado, país": resuelve ciudades con nombre repetido (Chatham, Louisville…)
 async function referencia(f) {
-  const ciudad = limpiarCiudad(f[F.ciudad]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
+  const ciudad = limpiarCiudad(f[F.ciudad]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]), est = txt(f[F.estado]);
   const cod = codigoPais(f[F.pais]);
   if (!ciudad) return null;
+  if (est) { const p = await geocodificar([ciudad, est, pais].filter(Boolean).join(", "), cod); if (p) return p; }
   if (cp) { const p = await geocodificar([ciudad, cp, pais].filter(Boolean).join(", "), cod); if (p) return p; }
   return geocodificar([ciudad, pais].filter(Boolean).join(", "), cod);
 }
@@ -169,14 +189,15 @@ const cerca = (p, ref) => !ref || distKm(p, ref) <= MAX_KM;
 
 async function buscarExacta(f) {
   const calle = limpiarCalle(f[F.calle]), ciudad = limpiarCiudad(f[F.ciudad]), venue = txt(f[F.venue]).split(/\r?\n/)[0];
-  const pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]);
+  const pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]), est = txt(f[F.estado]);
   const cod = codigoPais(f[F.pais]);
   const variantes = [];
   if (calle && ciudad) {
+    if (est) variantes.push([calle, ciudad, est, cp, pais], [calle, ciudad, est, pais]);
     variantes.push([calle, ciudad, cp, pais], [calle, ciudad, pais]);
   }
   if (calle && cp) variantes.push([calle, cp, pais]);
-  if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, pais]);
+  if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, est, pais]);
   const consultas = [...new Set(variantes.map(v => v.filter(Boolean).join(", ")))];
   if (!consultas.length) return null;
   const ref = await referencia(f);
@@ -185,14 +206,26 @@ async function buscarExacta(f) {
   return null;
 }
 async function buscarAproximada(f) {
-  const ciudad = limpiarCiudad(f[F.ciudad]), cp = txt(f[F.cp]), pais = limpiarPais(f[F.pais]);
+  const ciudad = limpiarCiudad(f[F.ciudad]), cp = txt(f[F.cp]), pais = limpiarPais(f[F.pais]), est = txt(f[F.estado]);
   const cod = codigoPais(f[F.pais]);
-  for (const v of [[ciudad, cp, pais], [ciudad, pais]]) {
+  const intentos = est ? [[ciudad, est, pais], [ciudad, cp, pais], [ciudad, pais]] : [[ciudad, cp, pais], [ciudad, pais]];
+  for (const v of intentos) {
     if (!v[0]) continue;
     const p = await geocodificar(v.filter(Boolean).join(", "), cod);
     if (p) return p;
   }
   return null;
+}
+
+// Control cruzado: si el código postal queda lejos del pin, uno de los dos datos está mal cargado.
+// No mueve el pin: deja el aviso en "Estado mapa" para revisarlo.
+async function avisoCP(f, punto) {
+  const cp = txt(f[F.cp]);
+  if (!cp || !punto) return "";
+  const z = await geocodificarCP(cp, codigoPais(f[F.pais]));
+  if (!z) return "";
+  const d = distKm(punto, z);
+  return d > MAX_KM ? `Revisar: el código postal ${cp} queda a ${Math.round(d)} km del pin (ciudad, estado o código postal mal cargados)` : "";
 }
 
 const records = await leerTodo();
@@ -204,7 +237,7 @@ const APROX_ANTERIOR = "Ubicación aproximada (centro de la ciudad). Si corregí
 const APROX = "Ubicación aproximada (centro de la ciudad): no se encontró la dirección exacta. Si la corregís, borrá Latitude y Longitude para que el robot vuelva a buscar";
 const NO_ENCONTRADA = "Dirección no encontrada: corregirla o cargar Latitude y Longitude a mano";
 const cambios = [];
-let ubicados = 0, mejorados = 0, aproximados = 0, sinUbicar = 0;
+let ubicados = 0, mejorados = 0, aproximados = 0, sinUbicar = 0, avisos = 0;
 for (const rec of records) {
   const f = rec.fields;
   const tiene = num(f[F.lat]) !== null && num(f[F.lng]) !== null;
@@ -213,7 +246,9 @@ for (const rec of records) {
   const exacta = await buscarExacta(f);
   if (exacta) {
     tiene ? mejorados++ : ubicados++;
-    cambios.push({ id: rec.id, fields: { [F.lat]: exacta.lat.toFixed(6), [F.lng]: exacta.lng.toFixed(6), [ESTADO_CAMPO]: "" } });
+    const aviso = await avisoCP(f, exacta);
+    if (aviso) avisos++;
+    cambios.push({ id: rec.id, fields: { [F.lat]: exacta.lat.toFixed(6), [F.lng]: exacta.lng.toFixed(6), [ESTADO_CAMPO]: aviso } });
     f[F.lat] = exacta.lat.toFixed(6); f[F.lng] = exacta.lng.toFixed(6);
     continue;
   }
@@ -221,7 +256,9 @@ for (const rec of records) {
   const aprox = await buscarAproximada(f);
   if (aprox) {
     aproximados++;
-    cambios.push({ id: rec.id, fields: { [F.lat]: aprox.lat.toFixed(6), [F.lng]: aprox.lng.toFixed(6), [ESTADO_CAMPO]: APROX } });
+    const aviso = await avisoCP(f, aprox);
+    if (aviso) avisos++;
+    cambios.push({ id: rec.id, fields: { [F.lat]: aprox.lat.toFixed(6), [F.lng]: aprox.lng.toFixed(6), [ESTADO_CAMPO]: aviso ? `${APROX} — ${aviso}` : APROX } });
     f[F.lat] = aprox.lat.toFixed(6); f[F.lng] = aprox.lng.toFixed(6);
   } else {
     sinUbicar++;
@@ -251,7 +288,7 @@ if (process.env.REVISAR === "1") {
 for (let i = 0; i < cambios.length; i += 10) {
   await airtable("", { method: "PATCH", body: JSON.stringify({ records: cambios.slice(i, i + 10) }) });
 }
-console.log(`Coordenadas: ${ubicados} nuevas exactas, ${mejorados} aproximadas mejoradas a exactas, ${aproximados} aproximadas, ${sinUbicar} sin ubicar`);
+console.log(`Coordenadas: ${ubicados} nuevas exactas, ${mejorados} aproximadas mejoradas a exactas, ${aproximados} aproximadas, ${sinUbicar} sin ubicar, ${avisos} con aviso de código postal`);
 
 // --- Datos y fotos de los círculos publicados -------------------------------------
 await mkdir(`${OUT}/data`, { recursive: true });
@@ -280,7 +317,7 @@ for (const rec of records) {
     } catch (e) { foto = ""; fotosError++; }
   }
   const contacto = [txt(f[F.nombrePila]), txt(f[F.apellido])].filter(Boolean).join(" ");
-  const direccion = [txt(f[F.calle]), txt(f[F.ciudad]), txt(f[F.cp]), txt(f[F.pais])].filter(Boolean).join(", ");
+  const direccion = [txt(f[F.calle]), txt(f[F.ciudad]), txt(f[F.estado]), txt(f[F.cp]), txt(f[F.pais])].filter(Boolean).join(", ");
   publicados.push({
     id, nombre: txt(f[F.nombre]), pais: txt(f[F.pais]), ciudad: txt(f[F.ciudad]), venue: txt(f[F.venue]),
     direccion, contacto, telefono: txt(f[F.tel]), email: txt(f[F.email]),
