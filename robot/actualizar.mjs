@@ -101,11 +101,13 @@ async function leerTodo() {
 }
 
 const cache = new Map();
-async function geocodificar(q, pais = "") {
-  const clave = `${q}|${pais}`;
+// soloCiudad: devuelve solo ciudades/pueblos/aldeas, no condados ni provincias (featureType=city de Nominatim)
+async function geocodificar(q, pais = "", soloCiudad = false) {
+  const clave = `${q}|${pais}|${soloCiudad}`;
   if (cache.has(clave)) return cache.get(clave);
   let u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=en&q=${encodeURIComponent(q)}`;
   if (pais) u += `&countrycodes=${pais.toLowerCase()}`;
+  if (soloCiudad) u += `&featureType=city`;
   let res = null;
   try {
     const r = await fetch(u, { headers: { "User-Agent": UA } });
@@ -183,9 +185,14 @@ async function referencia(f) {
   const ciudad = limpiarCiudad(f[F.ciudad]), pais = limpiarPais(f[F.pais]), cp = txt(f[F.cp]), est = txt(f[F.estado]);
   const cod = codigoPais(f[F.pais]);
   if (!ciudad) return null;
-  if (est) { const p = await geocodificar([ciudad, est, pais].filter(Boolean).join(", "), cod); if (p) return p; }
-  if (cp) { const p = await geocodificar([ciudad, cp, pais].filter(Boolean).join(", "), cod); if (p) return p; }
-  return geocodificar([ciudad, pais].filter(Boolean).join(", "), cod);
+  const intentos = [];
+  if (est) intentos.push([ciudad, est, pais]);
+  if (cp) intentos.push([ciudad, cp, pais]);
+  intentos.push([ciudad, pais]);
+  // Primero solo ciudades (evita que "Franklin, North Carolina" devuelva el condado); si no hay, como antes
+  for (const solo of [true, false])
+    for (const v of intentos) { const p = await geocodificar(v.filter(Boolean).join(", "), cod, solo); if (p) return p; }
+  return null;
 }
 const cerca = (p, ref) => !ref || distKm(p, ref) <= MAX_KM;
 
@@ -199,7 +206,8 @@ async function buscarExacta(f) {
     variantes.push([calle, ciudad, cp, pais], [calle, ciudad, pais]);
   }
   if (calle && cp) variantes.push([calle, cp, pais]);
-  if (venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, est, pais]);
+  // El nombre del lugar solo ayuda si además hay calle: sin calle, lo que encuentra no es confiable (pasó con Santa Barbara)
+  if (calle && venue && ciudad && !/^(none|unknown|variable)/i.test(venue)) variantes.push([venue, ciudad, est, pais]);
   const consultas = [...new Set(variantes.map(v => v.filter(Boolean).join(", ")))];
   if (!consultas.length) return null;
   const ref = await referencia(f);
@@ -211,11 +219,12 @@ async function buscarAproximada(f) {
   const ciudad = limpiarCiudad(f[F.ciudad]), cp = txt(f[F.cp]), pais = limpiarPais(f[F.pais]), est = txt(f[F.estado]);
   const cod = codigoPais(f[F.pais]);
   const intentos = est ? [[ciudad, est, pais], [ciudad, cp, pais], [ciudad, pais]] : [[ciudad, cp, pais], [ciudad, pais]];
-  for (const v of intentos) {
-    if (!v[0]) continue;
-    const p = await geocodificar(v.filter(Boolean).join(", "), cod);
-    if (p) return p;
-  }
+  for (const solo of [true, false])   // primero solo ciudades; si no hay, como antes
+    for (const v of intentos) {
+      if (!v[0]) continue;
+      const p = await geocodificar(v.filter(Boolean).join(", "), cod, solo);
+      if (p) return p;
+    }
   return null;
 }
 
