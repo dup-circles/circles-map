@@ -161,9 +161,11 @@ const limpiarCiudad = c => {
   if (c.includes(" - ")) c = c.split(" - ").pop();
   return c.replace(/\b(area|region|zone)\b/ig, " ").replace(/\s+/g, " ").trim();
 };
+// Frases que la gente escribe en "Street Address" en vez de una calle (palabras completas: "Zandzoom" sí es una calle)
+const NO_ES_CALLE = /\b(to be determined|tbd|tba|unknown|none|call for|varies|variable|various|rotating|online|zoom|e-?mail|contact|on request|upon request|ask for|pm for|dm for|message|please|p\.?\s?o\.?\s?box)\b/i;
 const limpiarCalle = c => {
   const lineas = txt(c).split(/\r?\n/).map(l => l.replace(/\([^)]*\)/g, " ").trim())
-    .filter(l => l && !/(to be determined|tbd|unknown|none|call for|varies|variable|various|rotating|online|zoom)/i.test(l));
+    .filter(l => l && !NO_ES_CALLE.test(l));
   return (lineas[0] || "").replace(/\s+/g, " ").trim();
 };
 const limpiarPais = p => /^(other|otro|none|unknown)$/i.test(txt(p)) ? "" : txt(p);
