@@ -931,20 +931,18 @@ function openFan(cl){
 // Ejecuta fn cuando terminan el movimiento del mapa y la reorganización de grupos
 function afterMove(fn){ map.once("moveend", () => setTimeout(fn, 350)); }
 
-// Clic en la lista: misma regla, mínimo acercamiento para que ese círculo quede visible
-function focusMarker(m){
+// Clic en la lista: acerca a nivel de calle (15) y abre el popup.
+// Los pines aproximados (centro de la ciudad) se acercan menos (13): mostrar calles daría una precisión que no tienen.
+// Si a ese nivel el círculo sigue agrupado con otros, acerca hasta que se separe; si comparten el mismo punto, abre el abanico.
+const ZOOM_LISTA = 15, ZOOM_LISTA_APROX = 13;
+function focusMarker(m, aprox){
   const show = () => { const p = cluster.getVisibleParent(m);
     if (p === m) { m.openPopup(); return; }
     if (p && p.spiderfy) { cluster.once("spiderfied", () => m.openPopup()); openFan(p); } };
-  const deepest = m.__parent;
-  let target;
-  if (!deepest || deepest._zoom < map.getMaxZoom()) {
-    target = Math.max(map.getZoom(), deepest ? deepest._zoom + 1 : map.getZoom());
-  } else {
-    let n = deepest;
-    while (n.__parent && n.__parent._zoom >= map.getMinZoom() && n.__parent.getChildCount() === n.getChildCount()) n = n.__parent;
-    target = Math.max(map.getZoom(), n._zoom);
-  }
+  let target = Math.max(map.getZoom(), aprox ? ZOOM_LISTA_APROX : ZOOM_LISTA);
+  const deepest = m.__parent;   // grupo más profundo que todavía contiene este pin
+  if (deepest && deepest._zoom >= target && deepest._zoom < map.getMaxZoom()) target = deepest._zoom + 1;
+  target = Math.min(target, map.getMaxZoom());
   if (target === map.getZoom() && map.getBounds().pad(-0.1).contains(m.getLatLng())) { show(); return; }
   afterMove(show);
   map.flyTo(m.getLatLng(), target, {duration:0.8});
@@ -1005,7 +1003,7 @@ function render(q){
     idx.forEach(i => {
       const c = DATA[i], it = document.createElement("li");
       it.innerHTML = `<button type="button"><span class="ring" aria-hidden="true"></span><span><span class="li-name">${esc(c.Name)}</span><br><span class="li-place">${esc(c.Address||"")}</span></span></button>`;
-      it.firstChild.addEventListener("click", () => focusMarker(markers[i]));
+      it.firstChild.addEventListener("click", () => focusMarker(markers[i], !!c.aprox));
       ul.appendChild(it);
     });
     li.appendChild(det); list.appendChild(li);
