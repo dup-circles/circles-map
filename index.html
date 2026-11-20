@@ -703,6 +703,9 @@ h1{font-family:var(--head);font-weight:600;font-size:22px;line-height:1.2;margin
 .search{width:100%;font:inherit;font-size:15px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)}
 .search:focus{outline:2px solid var(--teal);outline-offset:1px}
 .count{font-size:13px;color:var(--muted);margin-top:10px}
+.missing{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted);margin-top:10px}
+.missing-btn{font:600 13px/1 var(--body);color:var(--teal);border:1.5px solid var(--teal);border-radius:999px;padding:6px 12px;text-decoration:none}
+.missing-btn:hover{background:var(--teal);color:#fff}
 ul{list-style:none;margin:0;padding:0 8px 16px;overflow-y:auto;flex:1}
 li button{all:unset;box-sizing:border-box;display:flex;gap:12px;align-items:center;width:100%;padding:10px 12px;border-radius:10px;cursor:pointer}
 li button:hover,li button:focus-visible{background:var(--paper)}
@@ -793,6 +796,7 @@ html{scroll-padding-top:env(safe-area-inset-top,0px)}
       <input class="search" id="q" type="search" placeholder="Search by name, city or country" aria-label="Search circles">
       <div class="count" id="count"></div>
       <div class="legend-aprox"><i aria-hidden="true"></i>Dashed pin: approximate location</div>
+      <div class="missing">Can't find your circle? <a class="missing-btn" href="mailto:matias@dancesofuniversalpeace.org?subject=My%20circle%20is%20not%20on%20the%20map">Email us</a></div>
     </div>
     <ul id="list"></ul>
   </aside>
