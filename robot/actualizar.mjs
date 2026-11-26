@@ -287,11 +287,17 @@ if (process.env.REVISAR === "1") {
     if (lat === null || lng === null) continue;
     const ref = await referencia(f);
     if (!ref) continue;
-    const d = distKm({ lat, lng }, ref);
-    if (d > MAX_KM) {
-      lejos++;
-      cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: `Revisar ubicación: el pin está a ${Math.round(d)} km de ${limpiarCiudad(f[F.ciudad])}` } });
-    }
+    const dCiudad = distKm({ lat, lng }, ref);
+    if (dCiudad <= MAX_KM) continue;                         // cerca de la ciudad: OK
+    // Lejos de la ciudad: se compara también con el código postal. Si está cerca de uno de los dos, no hay alarma
+    // (la ciudad puede tener nombre repetido o estar mal cargada, como Mystic o Gifu)
+    const cp = txt(f[F.cp]);
+    const zCP = await geocodificarCP(cp, codigoPais(f[F.pais]));
+    const dCP = zCP ? distKm({ lat, lng }, zCP) : null;
+    if (dCP !== null && dCP <= MAX_KM) continue;             // cerca del código postal: OK
+    lejos++;
+    const detalle = dCP !== null ? `, a ${Math.round(dCP)} km del código postal ${cp}` : " (sin código postal para comparar)";
+    cambios.push({ id: rec.id, fields: { [ESTADO_CAMPO]: `Revisar ubicación: el pin está a ${Math.round(dCiudad)} km de ${limpiarCiudad(f[F.ciudad])}${detalle}` } });
   }
   console.log(`Revisión: ${lejos} pines lejos de su ciudad`);
 }
